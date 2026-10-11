@@ -287,6 +287,7 @@ class AppState extends ChangeNotifier {
   // Active workout session state
   Workout? _activeWorkoutSession;
   int _sessionSeconds = 0;
+  DateTime? _sessionStartedAt;
   Timer? _sessionTimer;
 
   Workout? get activeWorkoutSession => _activeWorkoutSession;
@@ -779,6 +780,7 @@ class AppState extends ChangeNotifier {
     _sessionTimer = null;
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
+    _sessionStartedAt = null;
     if (isFirebaseAvailable) {
       if (!kIsWeb) {
         try {
@@ -904,6 +906,7 @@ class AppState extends ChangeNotifier {
           .toList(),
     );
     _sessionSeconds = 0;
+    _sessionStartedAt = DateTime.now();
     _sessionTimer?.cancel();
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _sessionSeconds++;
@@ -927,6 +930,7 @@ class AppState extends ChangeNotifier {
     _sessionTimer = null;
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
+    _sessionStartedAt = null;
     notifyListeners();
   }
 
@@ -935,9 +939,8 @@ class AppState extends ChangeNotifier {
     _sessionTimer?.cancel();
 
     final now = DateTime.now();
-    final dateKey = DateFormat('yyyy-MM-dd').format(now);
-    final logId =
-        '${dateKey}_${_activeWorkoutSession!.id}_${now.millisecondsSinceEpoch}';
+    final dateKey = DateFormat('yyyy-MM-dd').format(_sessionStartedAt ?? now);
+    final logId = '${dateKey}_${_activeWorkoutSession!.id}';
 
     final newLog = WorkoutLog(
       id: logId,
@@ -952,13 +955,16 @@ class AppState extends ChangeNotifier {
           .toList(),
     );
 
-    // Remove existing log for the same workout & date if any
-    _logs.removeWhere((l) => l.id == logId);
+    // Replace an existing completion for the same workout and date.
+    _logs.removeWhere(
+      (l) => l.workoutId == newLog.workoutId && l.date == newLog.date,
+    );
     _logs.insert(0, newLog);
     await saveLog(newLog);
 
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
+    _sessionStartedAt = null;
     notifyListeners();
   }
 
@@ -987,18 +993,44 @@ class AppState extends ChangeNotifier {
 
   int getWeeklyStreak() {
     if (_logs.isEmpty) return 0;
-    // Calculate distinct weeks with at least 1 completed workout
-    final Set<String> weeksWithWorkouts = {};
-    for (final log in _logs) {
-      final weekNum =
-          (log.completedAt
-                      .difference(DateTime(log.completedAt.year, 1, 1))
-                      .inDays /
-                  7)
-              .floor();
-      weeksWithWorkouts.add('${log.completedAt.year}-$weekNum');
+
+    final scheduled = <int, Set<String>>{
+      for (var day = 1; day <= 7; day++)
+        day: (_weeklySchedule['$day'] ?? const <String>[]).toSet(),
+    };
+    if (scheduled.values.every((ids) => ids.isEmpty)) return 0;
+
+    final completed = <String>{
+      for (final log in _logs) '${log.date}|${log.workoutId}',
+    };
+    final today = DateTime.now();
+    final currentMonday = DateTime(
+      today.year,
+      today.month,
+      today.day - today.weekday + 1,
+    );
+
+    bool isComplete(DateTime monday) {
+      for (var day = 1; day <= 7; day++) {
+        final dateKey = DateFormat(
+          'yyyy-MM-dd',
+        ).format(monday.add(Duration(days: day - 1)));
+        for (final workoutId in scheduled[day]!) {
+          if (!completed.contains('$dateKey|$workoutId')) return false;
+        }
+      }
+      return true;
     }
-    return weeksWithWorkouts.length;
+
+    var week = currentMonday;
+    if (!isComplete(week)) week = week.subtract(const Duration(days: 7));
+
+    var streak = 0;
+    while (isComplete(week)) {
+      streak++;
+      week = week.subtract(const Duration(days: 7));
+    }
+    return streak;
   }
 
   @override
@@ -1436,8 +1468,9 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -1643,8 +1676,8 @@ class _AuthScreenState extends State<AuthScreen> {
                           borderSide: BorderSide.none,
                         ),
                       ),
-                      validator: (v) => (v == null || v.length < 6)
-                          ? 'Minimum 6 characters'
+                      validator: (v) => (v == null || v.length < 8)
+                          ? 'Minimum 8 characters'
                           : null,
                     ),
                     const SizedBox(height: 28),
@@ -2339,7 +2372,9 @@ class _DashboardTabState extends State<DashboardTab> {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  streak > 0 ? 'Consistency is king. Unbroken weekly rhythm.' : 'Complete scheduled routines to begin your weekly streak.',
+                  streak > 0
+                      ? 'Consistency is king. Unbroken weekly rhythm.'
+                      : 'Complete scheduled routines to begin your weekly streak.',
                   style: TextStyle(
                     fontSize: 13,
                     color: theme.colorScheme.secondary,
@@ -2453,9 +2488,9 @@ class _DashboardTabState extends State<DashboardTab> {
                         child: Text(
                           isTomorrow
                               ? 'TOMORROW'
-                              : DateFormat('EEE, MMM d')
-                                    .format(date)
-                                    .toUpperCase(),
+                              : DateFormat(
+                                  'EEE, MMM d',
+                                ).format(date).toUpperCase(),
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 10,
                             fontWeight: FontWeight.w800,
@@ -4995,8 +5030,9 @@ class HistoryTab extends StatelessWidget {
               itemBuilder: (context, index) {
                 final log = logs[index];
                 final durationMin = (log.durationSeconds / 60).round();
-                final formattedDate = DateFormat('EEE, MMM d, yyyy · h:mm a')
-                    .format(log.completedAt);
+                final formattedDate = DateFormat(
+                  'EEE, MMM d, yyyy · h:mm a',
+                ).format(log.completedAt);
                 final completedExercises = log.exercises
                     .where((e) => e.isCompleted)
                     .length;
@@ -5472,8 +5508,9 @@ class ProfileTab extends StatelessWidget {
       await appState.logout();
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not sign out: $error')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not sign out: $error')));
     }
   }
 

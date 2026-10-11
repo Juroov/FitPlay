@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read, create, update, delete: if owns(uid);
+
+      match /workouts/{workoutId} {
+        allow read, delete: if owns(uid);
+        allow create, update: if owns(uid)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 60
+          && request.resource.data.exercises is list
+          && request.resource.data.exercises.size() > 0
+          && request.resource.data.exercises.size() <= 50;
+      }
+
+      match /logs/{logId} {
+        allow read, delete: if owns(uid);
+        allow create, update: if owns(uid)
+          && request.resource.data.workoutId is string
+          && request.resource.data.date is string
+          && request.resource.data.exercises is list;
+      }
+
+      match /meta/{document} {
+        allow read, write: if owns(uid);
+      }
+    }
+  }
+}

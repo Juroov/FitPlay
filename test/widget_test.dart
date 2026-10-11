@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_app/main.dart';
+import 'package:fitplay/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,7 +24,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Enter a valid email'), findsOneWidget);
-    expect(find.text('Minimum 6 characters'), findsOneWidget);
+    expect(find.text('Minimum 8 characters'), findsOneWidget);
 
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Email Address'),
@@ -32,7 +32,7 @@ void main() {
     );
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Password'),
-      'password',
+      'password1',
     );
     await tester.ensureVisible(find.widgetWithText(FilledButton, 'Sign In'));
     await tester.tap(find.widgetWithText(FilledButton, 'Sign In'));
@@ -59,7 +59,7 @@ void main() {
   ) async {
     final appState = AppState(initialDarkMode: true);
     addTearDown(appState.dispose);
-    await appState.login('athlete@example.com', 'password');
+    await appState.login('athlete@example.com', 'password1');
 
     await tester.pumpWidget(
       ChangeNotifierProvider.value(value: appState, child: const FitTrackApp()),
@@ -90,7 +90,7 @@ void main() {
   test('logout cancels an active workout session', () async {
     final appState = AppState(initialDarkMode: true);
     addTearDown(appState.dispose);
-    await appState.login('athlete@example.com', 'password');
+    await appState.login('athlete@example.com', 'password1');
     appState.startWorkoutSession(appState.workouts.first);
 
     await appState.logout();
@@ -98,5 +98,20 @@ void main() {
     expect(appState.isAuthenticated, isFalse);
     expect(appState.isSessionRunning, isFalse);
     expect(appState.sessionSeconds, 0);
+  });
+
+  test('completing the same workout twice in a day is idempotent', () async {
+    final appState = AppState(initialDarkMode: true);
+    addTearDown(appState.dispose);
+    await appState.login('athlete@example.com', 'password1');
+
+    final workout = appState.workouts.first;
+    appState.startWorkoutSession(workout);
+    await appState.completeActiveSession();
+    appState.startWorkoutSession(workout);
+    await appState.completeActiveSession();
+
+    expect(appState.logs, hasLength(1));
+    expect(appState.logs.single.id, contains(workout.id));
   });
 }

@@ -1,17 +1,47 @@
-# flutter_app
+# FitPlay
 
-A new Flutter project.
+FitPlay is a Flutter workout planner and gym-session tracker. It supports
+email/password and Google authentication, reusable workout routines, weekly
+scheduling, timed sessions, completion history, themes, and unit preferences.
 
-## Getting Started
+## Run locally
 
-This project is a starting point for a Flutter application.
+Requirements:
 
-A few resources to get you started if this is your first Flutter project:
+- Flutter 3.44 or newer
+- Dart 3.12 or newer
+- Chrome for web, or an Android device/emulator
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```sh
+flutter pub get
+flutter run -d chrome
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Android is also configured:
+
+```sh
+flutter run -d android
+```
+
+Firebase is configured for web and Android. On Windows, macOS, Linux, and iOS,
+the app remains runnable in local demo mode until platform credentials are
+generated with `flutterfire configure`.
+
+## Verification
+
+```sh
+flutter analyze
+flutter test
+```
+
+## Firebase
+
+Before a public deployment, deploy the checked-in Firestore security rules:
+
+```sh
+firebase deploy --only firestore:rules
+```
+
+Use separate Firebase projects for development and production, enable the
+desired authentication providers in Firebase Console, and enable App Check for
+production builds.
