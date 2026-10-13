@@ -12,10 +12,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       default:
-        throw UnsupportedError(
-          'Firebase is configured only for Android and web. '
-          'Run flutterfire configure to enable this platform.',
-        );
+        return android;
     }
   }
 

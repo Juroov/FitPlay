@@ -1,4 +1,4 @@
-# FitTrack: Gym Workout Tracker
+# FitPlay: Gym Workout Tracker
 
 **Platform:** Mobile (iOS + Android) · **Stack:** Flutter (Dart), Firebase Authentication, Cloud Firestore
 **Document status:** Build-ready spec v1.0 (MVP)
@@ -7,7 +7,7 @@
 
 ## 1. Overview
 
-FitTrack is a mobile app where users create an account, build a weekly gym schedule (Push, Pull, Leg, Upper Body, Lower Body, or custom days), see today's workout the moment they open the app, and check off exercises as they complete them.
+FitPlay is a mobile app where users create an account, build a weekly gym schedule (Push, Pull, Leg, Upper Body, Lower Body, or custom days), see today's workout the moment they open the app, and check off exercises as they complete them.
 
 **Core loop:** open app → see today's workout → do it → mark complete → see progress.
 
@@ -438,6 +438,6 @@ Decide these before or during Phase 0:
 1. **Exact schedule model:** weekday-based (assumed here) or a rotating cycle (e.g., Push → Pull → Legs → Rest regardless of weekday)?
 2. **Multiple workouts per day:** supported in this spec. Is that wanted, or should it be one per day?
 3. **Granularity of tracking:** exercise-level ticks (MVP) or per-set weight/reps logging?
-4. **App name & branding:** is "FitTrack" final? (Check store availability; the name is common.)
+4. **App name & branding:** FitPlay is the final product name; confirm store-listing availability before release.
 5. **Target platforms:** both iOS and Android at launch, or Android first?
 6. **Monetization:** free, ads, or paid tier later? This affects whether to plan for subscriptions early.

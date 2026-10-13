@@ -28,7 +28,7 @@ void main() async {
   final appState = AppState(initialDarkMode: isDarkMode);
 
   runApp(
-    ChangeNotifierProvider.value(value: appState, child: const FitTrackApp()),
+    ChangeNotifierProvider.value(value: appState, child: const FitPlayApp()),
   );
 }
 
@@ -287,7 +287,6 @@ class AppState extends ChangeNotifier {
   // Active workout session state
   Workout? _activeWorkoutSession;
   int _sessionSeconds = 0;
-  DateTime? _sessionStartedAt;
   Timer? _sessionTimer;
 
   Workout? get activeWorkoutSession => _activeWorkoutSession;
@@ -780,7 +779,6 @@ class AppState extends ChangeNotifier {
     _sessionTimer = null;
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
-    _sessionStartedAt = null;
     if (isFirebaseAvailable) {
       if (!kIsWeb) {
         try {
@@ -812,7 +810,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Called by FitTrackApp when FirebaseAuth reports an existing session
+  /// Called by FitPlayApp when FirebaseAuth reports an existing session
   Future<void> restoreSession(User user) async {
     _isAuthenticated = true;
     _userEmail = user.email ?? '';
@@ -906,7 +904,6 @@ class AppState extends ChangeNotifier {
           .toList(),
     );
     _sessionSeconds = 0;
-    _sessionStartedAt = DateTime.now();
     _sessionTimer?.cancel();
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _sessionSeconds++;
@@ -930,7 +927,6 @@ class AppState extends ChangeNotifier {
     _sessionTimer = null;
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
-    _sessionStartedAt = null;
     notifyListeners();
   }
 
@@ -939,7 +935,7 @@ class AppState extends ChangeNotifier {
     _sessionTimer?.cancel();
 
     final now = DateTime.now();
-    final dateKey = DateFormat('yyyy-MM-dd').format(_sessionStartedAt ?? now);
+    final dateKey = DateFormat('yyyy-MM-dd').format(now);
     final logId = '${dateKey}_${_activeWorkoutSession!.id}';
 
     final newLog = WorkoutLog(
@@ -955,16 +951,24 @@ class AppState extends ChangeNotifier {
           .toList(),
     );
 
-    // Replace an existing completion for the same workout and date.
+    final supersededLogIds = _logs
+        .where(
+          (log) => log.workoutId == newLog.workoutId && log.date == newLog.date,
+        )
+        .map((log) => log.id)
+        .where((id) => id != logId)
+        .toList();
     _logs.removeWhere(
-      (l) => l.workoutId == newLog.workoutId && l.date == newLog.date,
+      (log) => log.workoutId == newLog.workoutId && log.date == newLog.date,
     );
     _logs.insert(0, newLog);
+    for (final oldLogId in supersededLogIds) {
+      await _deleteLog(oldLogId);
+    }
     await saveLog(newLog);
 
     _activeWorkoutSession = null;
     _sessionSeconds = 0;
-    _sessionStartedAt = null;
     notifyListeners();
   }
 
@@ -992,43 +996,41 @@ class AppState extends ChangeNotifier {
   }
 
   int getWeeklyStreak() {
-    if (_logs.isEmpty) return 0;
+    if (_logs.isEmpty ||
+        !_weeklySchedule.values.any((workouts) => workouts.isNotEmpty)) {
+      return 0;
+    }
 
-    final scheduled = <int, Set<String>>{
-      for (var day = 1; day <= 7; day++)
-        day: (_weeklySchedule['$day'] ?? const <String>[]).toSet(),
-    };
-    if (scheduled.values.every((ids) => ids.isEmpty)) return 0;
+    DateTime startOfWeek(DateTime date) {
+      final day = DateTime(date.year, date.month, date.day);
+      return day.subtract(Duration(days: day.weekday - DateTime.monday));
+    }
 
-    final completed = <String>{
-      for (final log in _logs) '${log.date}|${log.workoutId}',
-    };
-    final today = DateTime.now();
-    final currentMonday = DateTime(
-      today.year,
-      today.month,
-      today.day - today.weekday + 1,
-    );
-
-    bool isComplete(DateTime monday) {
-      for (var day = 1; day <= 7; day++) {
-        final dateKey = DateFormat(
-          'yyyy-MM-dd',
-        ).format(monday.add(Duration(days: day - 1)));
-        for (final workoutId in scheduled[day]!) {
-          if (!completed.contains('$dateKey|$workoutId')) return false;
+    bool isWeekComplete(DateTime weekStart) {
+      for (var offset = 0; offset < 7; offset++) {
+        final scheduledDate = weekStart.add(Duration(days: offset));
+        final dateKey = DateFormat('yyyy-MM-dd').format(scheduledDate);
+        final scheduledIds = _weeklySchedule['${offset + 1}'] ?? const [];
+        for (final workoutId in scheduledIds) {
+          if (!_logs.any(
+            (log) => log.workoutId == workoutId && log.date == dateKey,
+          )) {
+            return false;
+          }
         }
       }
       return true;
     }
 
-    var week = currentMonday;
-    if (!isComplete(week)) week = week.subtract(const Duration(days: 7));
+    var cursor = startOfWeek(DateTime.now());
+    if (!isWeekComplete(cursor)) {
+      cursor = cursor.subtract(const Duration(days: 7));
+    }
 
     var streak = 0;
-    while (isComplete(week)) {
+    while (isWeekComplete(cursor)) {
       streak++;
-      week = week.subtract(const Duration(days: 7));
+      cursor = cursor.subtract(const Duration(days: 7));
     }
     return streak;
   }
@@ -1101,8 +1103,8 @@ class _TileMaterial extends StatelessWidget {
 // ROOT APPLICATION & THEME
 // ==========================================
 
-class FitTrackApp extends StatelessWidget {
-  const FitTrackApp({super.key});
+class FitPlayApp extends StatelessWidget {
+  const FitPlayApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1153,7 +1155,7 @@ class FitTrackApp extends StatelessWidget {
     );
 
     return MaterialApp(
-      title: 'FITPLAY',
+      title: 'FitPlay',
       debugShowCheckedModeBanner: false,
       themeMode: appState.isDarkMode ? ThemeMode.dark : ThemeMode.light,
       theme: ThemeData(
@@ -1274,10 +1276,10 @@ class FitTrackApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
         colorScheme: darkColorScheme,
-        scaffoldBackgroundColor: const Color(0xFF000000), // Pure OLED obsidian
+        scaffoldBackgroundColor: const Color(0xFF0D0D10),
         textTheme: textThemeDark,
         appBarTheme: AppBarTheme(
-          backgroundColor: const Color(0xFF000000),
+          backgroundColor: const Color(0xFF0D0D10),
           foregroundColor: const Color(0xFFF4F4F5),
           elevation: 0,
           scrolledUnderElevation: 0,
@@ -1360,7 +1362,7 @@ class FitTrackApp extends StatelessWidget {
         ),
         navigationBarTheme: NavigationBarThemeData(
           height: 72,
-          backgroundColor: const Color(0xFF000000),
+          backgroundColor: const Color(0xFF0D0D10),
           indicatorColor: const Color(0xFFFFFFFF),
           iconTheme: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) {
@@ -1386,7 +1388,7 @@ class FitTrackApp extends StatelessWidget {
       ),
       home: !appState.isFirebaseAvailable
           ? (appState.isAuthenticated
-                ? const FitTrackMainShell()
+                ? const FitPlayMainShell()
                 : const AuthScreen())
           : StreamBuilder<User?>(
               stream: FirebaseAuth.instance.authStateChanges(),
@@ -1403,7 +1405,7 @@ class FitTrackApp extends StatelessWidget {
                       appState.restoreSession(snapshot.data!);
                     }
                   });
-                  return const FitTrackMainShell();
+                  return const FitPlayMainShell();
                 }
                 return const AuthScreen();
               },
@@ -1427,6 +1429,7 @@ class _AuthScreenState extends State<AuthScreen> {
   bool isSignUp = false;
   bool _isLoading = false;
   bool _isGoogleLoading = false;
+  bool _obscurePassword = true;
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final nameController = TextEditingController();
@@ -1468,9 +1471,8 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -1531,13 +1533,13 @@ class _AuthScreenState extends State<AuthScreen> {
                     // Brand Icon
                     Center(
                       child: Container(
-                        width: 88,
-                        height: 88,
+                        width: 80,
+                        height: 80,
                         decoration: BoxDecoration(
                           color: theme.brightness == Brightness.dark
                               ? const Color(0xFF141418)
                               : const Color(0xFF09090B),
-                          borderRadius: BorderRadius.circular(26),
+                          borderRadius: BorderRadius.circular(24),
                           border: Border.all(
                             color: theme.colorScheme.outlineVariant,
                             width: 1.5,
@@ -1546,29 +1548,30 @@ class _AuthScreenState extends State<AuthScreen> {
                         child: const Icon(
                           Icons.fitness_center_rounded,
                           color: Colors.white,
-                          size: 44,
+                          size: 40,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
                     Text(
-                      'FITPLAY',
+                      'FitPlay',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 28,
+                        fontSize: 30,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: 2.5,
+                        letterSpacing: -0.8,
                         color: theme.colorScheme.onSurface,
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'HIGH PERFORMANCE WORKOUT TRACKING',
+                      'Train with focus. Track what matters.',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.4,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0,
+                        height: 1.4,
                         color: theme.colorScheme.secondary,
                       ),
                     ),
@@ -1593,23 +1596,21 @@ class _AuthScreenState extends State<AuthScreen> {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.blue.withValues(alpha: 0.1),
+                          color: theme.colorScheme.surfaceContainer,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.blue.withValues(alpha: 0.3),
-                          ),
+                          border: Border.all(color: theme.colorScheme.outline),
                         ),
                         child: Row(
                           children: [
-                            const Icon(
+                            Icon(
                               Icons.info_outline_rounded,
-                              color: Colors.blue,
+                              color: theme.colorScheme.secondary,
                               size: 20,
                             ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                'Windows Local Mode: Firebase Auth & Firestore run on Android or Web (flutter run -d chrome).',
+                                'Local preview mode. Cloud sign-in and sync are available on Android and web.',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: theme.colorScheme.onSurface.withValues(
@@ -1648,6 +1649,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.email],
+                      autocorrect: false,
                       decoration: InputDecoration(
                         labelText: 'Email Address',
                         prefixIcon: const Icon(Icons.email_outlined),
@@ -1665,11 +1668,32 @@ class _AuthScreenState extends State<AuthScreen> {
 
                     TextFormField(
                       controller: passwordController,
-                      obscureText: true,
+                      obscureText: _obscurePassword,
                       textInputAction: TextInputAction.done,
+                      autofillHints: isSignUp
+                          ? const [AutofillHints.newPassword]
+                          : const [AutofillHints.password],
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      onFieldSubmitted: (_) {
+                        if (!_isLoading && !_isGoogleLoading) _submit();
+                      },
                       decoration: InputDecoration(
                         labelText: 'Password',
                         prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          tooltip: _obscurePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword,
+                          ),
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
+                        ),
                         filled: true,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
@@ -1709,59 +1733,62 @@ class _AuthScreenState extends State<AuthScreen> {
                               ),
                             ),
                     ),
-                    const SizedBox(height: 18),
-
-                    Row(
-                      children: [
-                        const Expanded(child: Divider()),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: Text(
-                            'OR',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.secondary,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ),
-                        const Expanded(child: Divider()),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 17),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      onPressed: (_isLoading || _isGoogleLoading)
-                          ? null
-                          : _submitGoogle,
-                      icon: _isGoogleLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text(
-                              'G',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
-                                color: Color(0xFF4285F4),
+                    if (appState.isFirebaseAvailable) ...[
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          const Expanded(child: Divider()),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            child: Text(
+                              'or',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.secondary,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.2,
                               ),
                             ),
-                      label: const Text(
-                        'Continue with Google',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
+                          ),
+                          const Expanded(child: Divider()),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 17),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onPressed: (_isLoading || _isGoogleLoading)
+                            ? null
+                            : _submitGoogle,
+                        icon: _isGoogleLoading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text(
+                                'G',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                  color: Color(0xFF4285F4),
+                                ),
+                              ),
+                        label: const Text(
+                          'Continue with Google',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                     const SizedBox(height: 12),
 
                     TextButton(
@@ -1793,14 +1820,14 @@ class _AuthScreenState extends State<AuthScreen> {
 // MAIN APP SHELL (BOTTOM NAVIGATION)
 // ==========================================
 
-class FitTrackMainShell extends StatefulWidget {
-  const FitTrackMainShell({super.key});
+class FitPlayMainShell extends StatefulWidget {
+  const FitPlayMainShell({super.key});
 
   @override
-  State<FitTrackMainShell> createState() => _FitTrackMainShellState();
+  State<FitPlayMainShell> createState() => _FitPlayMainShellState();
 }
 
-class _FitTrackMainShellState extends State<FitTrackMainShell> {
+class _FitPlayMainShellState extends State<FitPlayMainShell> {
   int _currentIndex = 0;
 
   @override
@@ -1817,7 +1844,7 @@ class _FitTrackMainShellState extends State<FitTrackMainShell> {
     return Scaffold(
       body: Stack(
         children: [
-          pages[_currentIndex],
+          IndexedStack(index: _currentIndex, children: pages),
           // Floating active session bar if workout in progress
           if (appState.isSessionRunning)
             Positioned(
@@ -1920,7 +1947,7 @@ class _ActiveSessionBanner extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'IN PROGRESS · $minutes:$seconds',
+                  'In progress  $minutes:$seconds',
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
@@ -1994,11 +2021,12 @@ class _DashboardTabState extends State<DashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: const Icon(Icons.fitness_center_rounded),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Hi, ${appState.displayName} 👋',
+              'Hi, ${appState.displayName}',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             Text(
@@ -2021,7 +2049,7 @@ class _DashboardTabState extends State<DashboardTab> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         children: [
           // Weekly Mon-Sun Interactive Day Selector
           _buildWeeklyInteractiveStrip(context, appState, currentIsoWeekday),
@@ -2035,42 +2063,15 @@ class _DashboardTabState extends State<DashboardTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Text(
-                    isViewingToday ? "Today's Plan" : "$selectedDayName's Plan",
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
-                      letterSpacing: -0.3,
-                    ),
+              Expanded(
+                child: Text(
+                  isViewingToday ? 'Today\'s plan' : '$selectedDayName\'s plan',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                    letterSpacing: -0.3,
                   ),
-                  if (!isViewingToday) ...[
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 9,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHigh,
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
-                        ),
-                      ),
-                      child: Text(
-                        'PREVIEWING',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
               if (!isViewingToday)
                 TextButton(
@@ -2120,26 +2121,31 @@ class _DashboardTabState extends State<DashboardTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.calendar_view_week_rounded,
-                    size: 20,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Upcoming Days & Programs',
-                    style: GoogleFonts.plusJakartaSans(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.3,
+              Expanded(
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_view_week_rounded,
+                      size: 20,
+                      color: theme.colorScheme.onSurface,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        'Upcoming programs',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
               Text(
-                'Next 6 days',
+                'Next 3 days',
                 style: TextStyle(
                   fontSize: 13,
                   color: theme.colorScheme.secondary,
@@ -2178,10 +2184,9 @@ class _DashboardTabState extends State<DashboardTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'WEEKLY SCHEDULE',
+                'This week',
                 style: GoogleFonts.plusJakartaSans(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
@@ -2189,11 +2194,17 @@ class _DashboardTabState extends State<DashboardTab> {
                   color: theme.colorScheme.secondary,
                 ),
               ),
-              Text(
-                'Tap day to inspect',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.secondary,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Tap day to inspect',
+                  textAlign: TextAlign.end,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.secondary,
+                  ),
                 ),
               ),
             ],
@@ -2209,89 +2220,88 @@ class _DashboardTabState extends State<DashboardTab> {
                   appState.weeklySchedule[isoDay.toString()] ?? [];
               final hasScheduledWorkout = scheduled.isNotEmpty;
 
-              return InkWell(
-                borderRadius: BorderRadius.circular(24),
-                onTap: () {
-                  setState(() {
-                    _selectedIsoWeekday = isoDay;
-                  });
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 4,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        days[index],
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 12,
-                          fontWeight: (isToday || isSelected)
-                              ? FontWeight.bold
-                              : FontWeight.w500,
-                          color: isSelected
-                              ? theme.colorScheme.onSurface
-                              : isToday
-                              ? theme.colorScheme.onSurface
-                              : theme.colorScheme.secondary,
+              return Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () {
+                    setState(() {
+                      _selectedIsoWeekday = isoDay;
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          days[index],
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: (isToday || isSelected)
+                                ? FontWeight.bold
+                                : FontWeight.w500,
+                            color: isSelected
+                                ? theme.colorScheme.onSurface
+                                : isToday
+                                ? theme.colorScheme.onSurface
+                                : theme.colorScheme.secondary,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isSelected
-                              ? theme.colorScheme.primary
-                              : isToday
-                              ? (isDark
-                                    ? const Color(0xFF1E1E24)
-                                    : const Color(0xFFF4F4F5))
-                              : Colors.transparent,
-                          border: Border.all(
+                        const SizedBox(height: 8),
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
                             color: isSelected
                                 ? theme.colorScheme.primary
                                 : isToday
-                                ? theme.colorScheme.onSurface
-                                : hasScheduledWorkout
-                                ? theme.colorScheme.outlineVariant
-                                : theme.colorScheme.outline.withValues(
-                                    alpha: 0.5,
-                                  ),
-                            width: (isSelected || isToday) ? 2 : 1,
+                                ? (isDark
+                                      ? const Color(0xFF1E1E24)
+                                      : const Color(0xFFF4F4F5))
+                                : Colors.transparent,
+                            border: Border.all(
+                              color: isSelected
+                                  ? theme.colorScheme.primary
+                                  : isToday
+                                  ? theme.colorScheme.onSurface
+                                  : hasScheduledWorkout
+                                  ? theme.colorScheme.outlineVariant
+                                  : theme.colorScheme.outline.withValues(
+                                      alpha: 0.5,
+                                    ),
+                              width: (isSelected || isToday) ? 2 : 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: Icon(
+                              hasScheduledWorkout
+                                  ? Icons.fitness_center_rounded
+                                  : Icons.bed_rounded,
+                              size: 16,
+                              color: isSelected
+                                  ? theme.colorScheme.onPrimary
+                                  : (hasScheduledWorkout || isToday)
+                                  ? theme.colorScheme.onSurface
+                                  : theme.colorScheme.secondary.withValues(
+                                      alpha: 0.5,
+                                    ),
+                            ),
                           ),
                         ),
-                        child: Center(
-                          child: Icon(
-                            hasScheduledWorkout
-                                ? Icons.fitness_center_rounded
-                                : Icons.bed_rounded,
-                            size: 16,
-                            color: isSelected
-                                ? theme.colorScheme.onPrimary
-                                : (hasScheduledWorkout || isToday)
-                                ? theme.colorScheme.onSurface
-                                : theme.colorScheme.secondary.withValues(
-                                    alpha: 0.5,
-                                  ),
+                        if (isToday) ...[
+                          const SizedBox(height: 5),
+                          Container(
+                            width: 4,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.onSurface,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                        ),
-                      ),
-                      if (isToday) ...[
-                        const SizedBox(height: 5),
-                        Container(
-                          width: 4,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.onSurface,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               );
@@ -2335,46 +2345,19 @@ class _DashboardTabState extends State<DashboardTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      '$streak WEEKS ACTIVE',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.5,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF27272A)
-                            : const Color(0xFFE4E4E7),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        'STREAK',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  '$streak week${streak == 1 ? '' : 's'}',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: theme.colorScheme.onSurface,
+                  ),
                 ),
                 const SizedBox(height: 5),
                 Text(
                   streak > 0
-                      ? 'Consistency is king. Unbroken weekly rhythm.'
-                      : 'Complete scheduled routines to begin your weekly streak.',
+                      ? 'Every scheduled routine completed for $streak consecutive week${streak == 1 ? '' : 's'}.'
+                      : 'Complete every scheduled routine this week to build your streak.',
                   style: TextStyle(
                     fontSize: 13,
                     color: theme.colorScheme.secondary,
@@ -2488,9 +2471,9 @@ class _DashboardTabState extends State<DashboardTab> {
                         child: Text(
                           isTomorrow
                               ? 'TOMORROW'
-                              : DateFormat(
-                                  'EEE, MMM d',
-                                ).format(date).toUpperCase(),
+                              : DateFormat('EEE, MMM d')
+                                    .format(date)
+                                    .toUpperCase(),
                           style: GoogleFonts.plusJakartaSans(
                             fontSize: 10,
                             fontWeight: FontWeight.w800,
@@ -3014,61 +2997,76 @@ class _WorkoutTodayCard extends StatelessWidget {
             color: isDark ? const Color(0xFF27272A) : const Color(0xFFE4E4E7),
           ),
           const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    minimumSize: const Size(0, 48),
-                    tapTargetSize: MaterialTapTargetSize.padded,
-                  ),
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => WorkoutEditorScreen(workout: workout),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stackActions = constraints.maxWidth < 320;
+              final actionWidth = stackActions
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - 12) / 2;
+
+              return Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                children: [
+                  SizedBox(
+                    width: actionWidth,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        minimumSize: const Size(0, 48),
+                        tapTargetSize: MaterialTapTargetSize.padded,
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.edit_note_rounded, size: 18),
-                  label: const Text(
-                    'View Routine',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                WorkoutEditorScreen(workout: workout),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.edit_note_rounded, size: 18),
+                      label: const Text(
+                        'View Routine',
+                        style: TextStyle(fontSize: 13),
+                      ),
                     ),
-                    minimumSize: const Size(0, 48),
-                    tapTargetSize: MaterialTapTargetSize.padded,
                   ),
-                  onPressed: () =>
-                      _openWorkoutSession(context, appState, workout),
-                  icon: Icon(
-                    isDone ? Icons.replay_rounded : Icons.play_arrow_rounded,
-                    size: 18,
+                  SizedBox(
+                    width: actionWidth,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        minimumSize: const Size(0, 48),
+                        tapTargetSize: MaterialTapTargetSize.padded,
+                      ),
+                      onPressed: () =>
+                          _openWorkoutSession(context, appState, workout),
+                      icon: Icon(
+                        isDone
+                            ? Icons.replay_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 18,
+                      ),
+                      label: Text(
+                        isDone
+                            ? 'Repeat Session'
+                            : isToday
+                            ? 'Start Workout'
+                            : 'Start Early',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
                   ),
-                  label: Text(
-                    isDone
-                        ? 'Repeat Session'
-                        : isToday
-                        ? 'Start Workout'
-                        : 'Start Early',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -3099,6 +3097,7 @@ class ScheduleTab extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
+        leading: const Icon(Icons.calendar_view_week_rounded),
         title: const Text('Weekly Split & Routines'),
         actions: [
           IconButton(
@@ -3114,10 +3113,10 @@ class ScheduleTab extends StatelessWidget {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         children: [
           Text(
-            'WEEKLY ASSIGNMENT',
+            'Week plan',
             style: GoogleFonts.plusJakartaSans(
               fontSize: 11,
               fontWeight: FontWeight.w800,
@@ -3208,7 +3207,7 @@ class ScheduleTab extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'MY ROUTINES LIBRARY',
+                    'My routines',
                     style: GoogleFonts.plusJakartaSans(
                       fontWeight: FontWeight.w800,
                       fontSize: 11,
@@ -3789,7 +3788,7 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'EXERCISES',
+                      'Exercises',
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -4715,7 +4714,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'ELAPSED TIME',
+                          'Elapsed',
                           style: TextStyle(
                             fontSize: 11,
                             letterSpacing: 1.2,
@@ -4760,7 +4759,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        'PROGRESS',
+                        'Progress',
                         style: TextStyle(
                           fontSize: 11,
                           letterSpacing: 1.0,
@@ -4970,7 +4969,10 @@ class HistoryTab extends StatelessWidget {
     final logs = appState.logs;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Workout History')),
+      appBar: AppBar(
+        leading: const Icon(Icons.history_rounded),
+        title: const Text('Workout history'),
+      ),
       body: logs.isEmpty
           ? Center(
               child: Padding(
@@ -5002,7 +5004,7 @@ class HistoryTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 20),
                     const Text(
-                      'NO SESSIONS LOGGED',
+                      'No sessions yet',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -5025,14 +5027,13 @@ class HistoryTab extends StatelessWidget {
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               itemCount: logs.length,
               itemBuilder: (context, index) {
                 final log = logs[index];
                 final durationMin = (log.durationSeconds / 60).round();
-                final formattedDate = DateFormat(
-                  'EEE, MMM d, yyyy · h:mm a',
-                ).format(log.completedAt);
+                final formattedDate = DateFormat('EEE, MMM d, yyyy · h:mm a')
+                    .format(log.completedAt);
                 final completedExercises = log.exercises
                     .where((e) => e.isCompleted)
                     .length;
@@ -5136,7 +5137,7 @@ class HistoryTab extends StatelessWidget {
                                       MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'COMPLETED EXERCISES',
+                                      'Completed exercises',
                                       style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w800,
@@ -5219,11 +5220,16 @@ class ProfileTab extends StatelessWidget {
     final appState = context.watch<AppState>();
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final isCloudSyncActive =
+        appState.isFirebaseAvailable && appState.isAuthenticated;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile & Settings')),
+      appBar: AppBar(
+        leading: const Icon(Icons.person_rounded),
+        title: const Text('Profile & settings'),
+      ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         children: [
           // User card
           Container(
@@ -5290,7 +5296,7 @@ class ProfileTab extends StatelessWidget {
 
           // Preferences section
           Text(
-            'PREFERENCES',
+            'Preferences',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
@@ -5387,7 +5393,7 @@ class ProfileTab extends StatelessWidget {
 
           // Backend / Cloud Status Section
           Text(
-            'CLOUD & BACKEND STATUS',
+            'Sync status',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
@@ -5414,30 +5420,30 @@ class ProfileTab extends StatelessWidget {
                   horizontal: 18,
                   vertical: 6,
                 ),
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.cloud_done_rounded,
-                    size: 20,
-                    color: Color(0xFF10B981),
-                  ),
+                leading: Icon(
+                  isCloudSyncActive
+                      ? Icons.cloud_done_rounded
+                      : Icons.cloud_off_outlined,
+                  size: 24,
+                  color: isCloudSyncActive
+                      ? const Color(0xFF10B981)
+                      : theme.colorScheme.secondary,
                 ),
-                title: const Text(
-                  'Firebase Cloud Sync',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                title: Text(
+                  isCloudSyncActive
+                      ? 'Cloud sync active'
+                      : 'Local preview mode',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
                 ),
                 subtitle: Padding(
                   padding: const EdgeInsets.only(top: 3),
                   child: Text(
-                    appState.isFirebaseAvailable
-                        ? (appState.isAuthenticated
-                              ? 'Active · Syncing to Firestore'
-                              : 'Connecting...')
-                        : 'Windows Desktop Mode (Local Preview) · Active on Android & Chrome',
+                    isCloudSyncActive
+                        ? 'Workout data is syncing with Firestore.'
+                        : 'Cloud sign-in and sync are unavailable in this preview.',
                     style: TextStyle(
                       fontSize: 13,
                       color: isDark
@@ -5446,8 +5452,12 @@ class ProfileTab extends StatelessWidget {
                     ),
                   ),
                 ),
-                trailing: const Icon(Icons.info_outline_rounded, size: 20),
-                onTap: () => _showFirebaseGuideDialog(context, appState),
+                trailing: isCloudSyncActive
+                    ? const Icon(Icons.info_outline_rounded, size: 20)
+                    : null,
+                onTap: isCloudSyncActive
+                    ? () => _showFirebaseGuideDialog(context, appState)
+                    : null,
               ),
             ),
           ),
@@ -5508,9 +5518,8 @@ class ProfileTab extends StatelessWidget {
       await appState.logout();
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not sign out: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not sign out: $error')));
     }
   }
 

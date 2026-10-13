@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:fitplay/main.dart';
+import 'package:flutter_app/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,7 +16,7 @@ void main() {
     addTearDown(appState.dispose);
 
     await tester.pumpWidget(
-      ChangeNotifierProvider.value(value: appState, child: const FitTrackApp()),
+      ChangeNotifierProvider.value(value: appState, child: const FitPlayApp()),
     );
     await tester.pump();
 
@@ -32,7 +32,7 @@ void main() {
     );
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Password'),
-      'password1',
+      'password',
     );
     await tester.ensureVisible(find.widgetWithText(FilledButton, 'Sign In'));
     await tester.tap(find.widgetWithText(FilledButton, 'Sign In'));
@@ -59,10 +59,10 @@ void main() {
   ) async {
     final appState = AppState(initialDarkMode: true);
     addTearDown(appState.dispose);
-    await appState.login('athlete@example.com', 'password1');
+    await appState.login('athlete@example.com', 'password');
 
     await tester.pumpWidget(
-      ChangeNotifierProvider.value(value: appState, child: const FitTrackApp()),
+      ChangeNotifierProvider.value(value: appState, child: const FitPlayApp()),
     );
     await tester.pump();
 
@@ -87,10 +87,41 @@ void main() {
     expect(find.text('Resume'), findsNothing);
   });
 
+  testWidgets('core tabs fit a narrow phone viewport', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final appState = AppState(initialDarkMode: true);
+    addTearDown(appState.dispose);
+    await appState.login('athlete@example.com', 'password');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(value: appState, child: const FitPlayApp()),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('Tue'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byIcon(Icons.calendar_month_outlined));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byIcon(Icons.person_outline_rounded));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
   test('logout cancels an active workout session', () async {
     final appState = AppState(initialDarkMode: true);
     addTearDown(appState.dispose);
-    await appState.login('athlete@example.com', 'password1');
+    await appState.login('athlete@example.com', 'password');
     appState.startWorkoutSession(appState.workouts.first);
 
     await appState.logout();
@@ -100,18 +131,36 @@ void main() {
     expect(appState.sessionSeconds, 0);
   });
 
-  test('completing the same workout twice in a day is idempotent', () async {
+  test('same routine keeps one completion per day', () async {
     final appState = AppState(initialDarkMode: true);
     addTearDown(appState.dispose);
-    await appState.login('athlete@example.com', 'password1');
-
+    await appState.login('athlete@example.com', 'password');
     final workout = appState.workouts.first;
+
     appState.startWorkoutSession(workout);
     await appState.completeActiveSession();
     appState.startWorkoutSession(workout);
     await appState.completeActiveSession();
 
     expect(appState.logs, hasLength(1));
-    expect(appState.logs.single.id, contains(workout.id));
+    expect(appState.logs.single.workoutId, workout.id);
+  });
+
+  test('weekly streak requires every scheduled routine', () async {
+    final appState = AppState(initialDarkMode: true);
+    addTearDown(appState.dispose);
+    await appState.login('athlete@example.com', 'password');
+    final workout = appState.workouts.first;
+
+    for (var day = 1; day <= 7; day++) {
+      appState.setDayWorkouts(day, []);
+    }
+    appState.setDayWorkouts(DateTime.now().weekday, [workout.id]);
+    expect(appState.getWeeklyStreak(), 0);
+
+    appState.startWorkoutSession(workout);
+    await appState.completeActiveSession();
+
+    expect(appState.getWeeklyStreak(), 1);
   });
 }
