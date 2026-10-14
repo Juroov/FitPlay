@@ -1394,8 +1394,32 @@ class FitPlayApp extends StatelessWidget {
               stream: FirebaseAuth.instance.authStateChanges(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Scaffold(
-                    body: Center(child: CircularProgressIndicator()),
+                  return Scaffold(
+                    backgroundColor: const Color(0xFF0D0D10),
+                    body: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Image.asset(
+                            'assets/images/logo_mark.png',
+                            width: 72,
+                            height: 72,
+                            fit: BoxFit.contain,
+                          ),
+                          const SizedBox(height: 24),
+                          const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Color(0xFFD00E17),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   );
                 }
                 if (snapshot.hasData && snapshot.data != null) {
@@ -1530,52 +1554,58 @@ class _AuthScreenState extends State<AuthScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Brand Icon
+                    // Brand Icon & Logo
                     Center(
                       child: Container(
-                        width: 80,
-                        height: 80,
+                        width: 76,
+                        height: 76,
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: theme.brightness == Brightness.dark
                               ? const Color(0xFF141418)
                               : const Color(0xFF09090B),
-                          borderRadius: BorderRadius.circular(24),
+                          borderRadius: BorderRadius.circular(22),
                           border: Border.all(
-                            color: theme.colorScheme.outlineVariant,
+                            color: const Color(0xFFD00E17).withValues(alpha: 0.35),
                             width: 1.5,
                           ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFD00E17).withValues(alpha: 0.22),
+                              blurRadius: 20,
+                              spreadRadius: 1,
+                            ),
+                          ],
                         ),
-                        child: const Icon(
-                          Icons.fitness_center_rounded,
-                          color: Colors.white,
-                          size: 40,
+                        child: Image.asset(
+                          'assets/images/logo_mark.png',
+                          fit: BoxFit.contain,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
                     Text(
-                      'FitPlay',
+                      'FITNESS PLAYGROUND',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.plusJakartaSans(
-                        fontSize: 30,
+                        fontSize: 22,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: -0.8,
+                        letterSpacing: 1.0,
                         color: theme.colorScheme.onSurface,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Text(
-                      'Train with focus. Track what matters.',
+                      'FitPlay • Train with focus. Track what matters.',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.plusJakartaSans(
                         fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0,
-                        height: 1.4,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2,
                         color: theme.colorScheme.secondary,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
                     Text(
                       isSignUp
                           ? 'Create your athlete profile to start tracking sets'
@@ -1584,10 +1614,10 @@ class _AuthScreenState extends State<AuthScreen> {
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.secondary,
                         fontSize: 14,
-                        height: 1.5,
+                        height: 1.4,
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 24),
 
                     if (!appState.isFirebaseAvailable) ...[
                       Container(
@@ -2021,7 +2051,13 @@ class _DashboardTabState extends State<DashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: const Icon(Icons.fitness_center_rounded),
+        leading: Padding(
+          padding: const EdgeInsets.all(10.0),
+          child: Image.asset(
+            'assets/images/logo_mark.png',
+            fit: BoxFit.contain,
+          ),
+        ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -5462,6 +5498,58 @@ class ProfileTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 32),
+
+          // Fitness Playground Brand Card
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF141418) : const Color(0xFFF4F4F5),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF27272A) : const Color(0xFFE4E4E7),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'assets/images/logo_mark.png',
+                    width: 34,
+                    height: 34,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'FITNESS PLAYGROUND',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.8,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'FitPlay Edition • v1.0.0',
+                        style: GoogleFonts.plusJakartaSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFFD00E17),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
 
           // Logout Button
           OutlinedButton.icon(
