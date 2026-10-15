@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -164,15 +165,19 @@ class Workout {
   };
 
   factory Workout.fromMap(Map<String, dynamic> map) => Workout(
-    id: map['id'] ?? UniqueKey().toString(),
-    name: map['name'] ?? 'Workout',
-    category: map['category'] ?? 'custom',
+    id: map['id']?.toString() ?? UniqueKey().toString(),
+    name: map['name']?.toString() ?? 'Workout',
+    category: map['category']?.toString() ?? 'custom',
     exercises:
         (map['exercises'] as List<dynamic>?)
-            ?.map((e) => Exercise.fromMap(e as Map<String, dynamic>))
+            ?.map(
+              (e) => Exercise.fromMap(
+                e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
+              ),
+            )
             .toList() ??
         [],
-    archived: map['archived'] ?? false,
+    archived: map['archived'] == true,
   );
 
   Workout copyWith({
@@ -223,18 +228,24 @@ class WorkoutLog {
   };
 
   factory WorkoutLog.fromMap(Map<String, dynamic> map) => WorkoutLog(
-    id: map['id'] ?? '',
-    workoutId: map['workoutId'] ?? '',
-    workoutName: map['workoutName'] ?? '',
-    category: map['category'] ?? 'custom',
-    date: map['date'] ?? '',
+    id: map['id']?.toString() ?? '',
+    workoutId: map['workoutId']?.toString() ?? '',
+    workoutName: map['workoutName']?.toString() ?? '',
+    category: map['category']?.toString() ?? 'custom',
+    date: map['date']?.toString() ?? '',
     completedAt: map['completedAt'] != null
-        ? DateTime.parse(map['completedAt'])
+        ? DateTime.tryParse(map['completedAt'].toString()) ?? DateTime.now()
         : DateTime.now(),
-    durationSeconds: map['durationSeconds'] ?? 0,
+    durationSeconds: (map['durationSeconds'] is num)
+        ? (map['durationSeconds'] as num).toInt()
+        : 0,
     exercises:
         (map['exercises'] as List<dynamic>?)
-            ?.map((e) => Exercise.fromMap(e as Map<String, dynamic>))
+            ?.map(
+              (e) => Exercise.fromMap(
+                e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
+              ),
+            )
             .toList() ??
         [],
   );
@@ -267,6 +278,16 @@ class AppState extends ChangeNotifier {
 
   // Workouts and schedule
   List<Workout> _workouts = [];
+  static Map<String, List<String>> get defaultWeeklySchedule => {
+    '1': ['push-1'], // Mon
+    '2': ['pull-1'], // Tue
+    '3': [], // Wed (Rest)
+    '4': ['legs-1'], // Thu
+    '5': ['upper-1'], // Fri
+    '6': [], // Sat (Rest)
+    '7': [], // Sun (Rest)
+  };
+
   Map<String, List<String>> _weeklySchedule = {
     '1': ['push-1'], // Mon
     '2': ['pull-1'], // Tue
@@ -304,6 +325,14 @@ class AppState extends ChangeNotifier {
   String? get _uid =>
       isFirebaseAvailable ? FirebaseAuth.instance.currentUser?.uid : null;
 
+  String get _storageUserKey {
+    if (_uid != null && _uid!.isNotEmpty) return _uid!;
+    if (_userEmail.isNotEmpty) {
+      return _userEmail.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+    }
+    return 'default_user';
+  }
+
   CollectionReference<Map<String, dynamic>>? get _workoutsCol =>
       (isFirebaseAvailable && _uid != null)
       ? FirebaseFirestore.instance
@@ -329,67 +358,182 @@ class AppState extends ChangeNotifier {
             .doc('schedule')
       : null;
 
-  // ── Load user data from Firestore after sign-in ────────────────────────────
+  // ── Load user data from Firestore & local storage after sign-in ────────────
 
   Future<void> loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
     _units = prefs.getString(_kUnitsKey) ?? 'kg';
+    final userKey = _storageUserKey;
+
+    bool loadLocalWorkouts() {
+      final localWorkoutsStr = prefs.getString('fittrack_workouts_$userKey');
+      if (localWorkoutsStr != null && localWorkoutsStr.isNotEmpty) {
+        try {
+          final list = jsonDecode(localWorkoutsStr) as List<dynamic>;
+          _workouts = list
+              .map((e) => Workout.fromMap(Map<String, dynamic>.from(e as Map)))
+              .toList();
+          return _workouts.isNotEmpty;
+        } catch (e) {
+          debugPrint('Local workouts parse error: $e');
+        }
+      }
+      return false;
+    }
+
+    bool loadLocalSchedule() {
+      final localSchedStr = prefs.getString('fittrack_schedule_$userKey');
+      if (localSchedStr != null && localSchedStr.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(localSchedStr) as Map<String, dynamic>;
+          final parsed = <String, List<String>>{};
+          decoded.forEach((k, v) {
+            if (v is List) {
+              parsed[k.toString()] = v.map((e) => e.toString()).toList();
+            } else {
+              parsed[k.toString()] = <String>[];
+            }
+          });
+          for (int i = 1; i <= 7; i++) {
+            parsed.putIfAbsent(i.toString(), () => <String>[]);
+          }
+          _weeklySchedule = parsed;
+          return true;
+        } catch (e) {
+          debugPrint('Local schedule parse error: $e');
+        }
+      }
+      return false;
+    }
 
     if (!isFirebaseAvailable || _uid == null) {
-      if (_workouts.isEmpty) {
-        await _initDefaultTemplates();
+      if (!loadLocalWorkouts() && _workouts.isEmpty) {
+        await _initDefaultTemplates(saveSchedule: false);
+      }
+      if (!loadLocalSchedule()) {
+        _weeklySchedule = defaultWeeklySchedule;
+        await _saveSchedule();
       }
       notifyListeners();
       return;
     }
 
     // Load profile metadata
+    Map<String, dynamic>? userDocData;
     try {
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(_uid)
           .get();
       if (userDoc.exists && userDoc.data() != null) {
-        final data = userDoc.data()!;
-        if (data['displayName'] is String &&
-            (data['displayName'] as String).isNotEmpty) {
-          _displayName = data['displayName'] as String;
+        userDocData = userDoc.data()!;
+        if (userDocData['displayName'] is String &&
+            (userDocData['displayName'] as String).isNotEmpty) {
+          _displayName = userDocData['displayName'] as String;
         }
-        if (data['units'] is String) {
-          _units = data['units'] as String;
+        if (userDocData['units'] is String) {
+          _units = userDocData['units'] as String;
         }
       }
     } catch (e) {
       debugPrint('Profile fetch error: $e');
     }
 
-    // Load workouts
+    // Load workouts from Firestore
     try {
       final snap = await _workoutsCol?.get();
       if (snap == null || snap.docs.isEmpty) {
-        await _initDefaultTemplates();
+        if (!loadLocalWorkouts()) {
+          await _initDefaultTemplates(saveSchedule: false);
+        }
       } else {
-        _workouts = snap.docs.map((d) => Workout.fromMap(d.data())).toList();
+        _workouts = snap.docs.map((d) {
+          final map = Map<String, dynamic>.from(d.data());
+          map['id'] = d.id;
+          return Workout.fromMap(map);
+        }).toList();
+        await _saveWorkouts();
       }
-    } catch (_) {
-      if (_workouts.isEmpty) {
-        await _initDefaultTemplates();
+    } catch (e) {
+      debugPrint('Firestore fetch workouts error: $e');
+      if (!loadLocalWorkouts() && _workouts.isEmpty) {
+        await _initDefaultTemplates(saveSchedule: false);
       }
     }
 
-    // Load schedule
-    try {
-      final schedSnap = await _scheduleDoc?.get();
-      if (schedSnap != null && schedSnap.exists && schedSnap.data() != null) {
-        final raw = schedSnap.data()!;
-        _weeklySchedule = raw.map(
-          (k, v) => MapEntry(
-            k,
-            (v as List<dynamic>).map((e) => e.toString()).toList(),
-          ),
-        );
+    // Load schedule with priority:
+    // 1. users/{uid} document 'weeklySchedule' field (primary Firestore spec)
+    // 2. users/{uid}/meta/schedule subcollection document
+    // 3. Local SharedPreferences cache for this user
+    // 4. Default split (only if brand new user with no schedule saved anywhere)
+    bool scheduleLoaded = false;
+
+    if (userDocData != null && userDocData['weeklySchedule'] is Map) {
+      try {
+        final raw = userDocData['weeklySchedule'] as Map;
+        final parsed = <String, List<String>>{};
+        raw.forEach((k, v) {
+          if (v is List) {
+            parsed[k.toString()] = v.map((e) => e.toString()).toList();
+          } else {
+            parsed[k.toString()] = <String>[];
+          }
+        });
+        for (int i = 1; i <= 7; i++) {
+          parsed.putIfAbsent(i.toString(), () => <String>[]);
+        }
+        _weeklySchedule = parsed;
+        scheduleLoaded = true;
+      } catch (e) {
+        debugPrint('userDoc weeklySchedule parse error: $e');
       }
-    } catch (_) {}
+    }
+
+    if (!scheduleLoaded) {
+      try {
+        final schedSnap = await _scheduleDoc?.get();
+        if (schedSnap != null && schedSnap.exists && schedSnap.data() != null) {
+          final raw = schedSnap.data()!;
+          final parsed = <String, List<String>>{};
+          raw.forEach((k, v) {
+            if (v is List) {
+              parsed[k.toString()] = v.map((e) => e.toString()).toList();
+            } else {
+              parsed[k.toString()] = <String>[];
+            }
+          });
+          for (int i = 1; i <= 7; i++) {
+            parsed.putIfAbsent(i.toString(), () => <String>[]);
+          }
+          _weeklySchedule = parsed;
+          scheduleLoaded = true;
+          // Synchronize back to user document for rapid single-read fetches
+          await _saveSchedule();
+        }
+      } catch (e) {
+        debugPrint('meta/schedule fetch error: $e');
+      }
+    }
+
+    if (!scheduleLoaded) {
+      scheduleLoaded = loadLocalSchedule();
+      if (scheduleLoaded) {
+        // Sync local schedule up to Firestore
+        await _saveSchedule();
+      }
+    }
+
+    if (!scheduleLoaded) {
+      _weeklySchedule = defaultWeeklySchedule;
+      await _saveSchedule();
+    } else {
+      try {
+        await prefs.setString(
+          'fittrack_schedule_$userKey',
+          jsonEncode(_weeklySchedule),
+        );
+      } catch (_) {}
+    }
 
     // Load logs
     try {
@@ -397,7 +541,11 @@ class AppState extends ChangeNotifier {
           ?.orderBy('completedAt', descending: true)
           .get();
       if (logsSnap != null) {
-        _logs = logsSnap.docs.map((d) => WorkoutLog.fromMap(d.data())).toList();
+        _logs = logsSnap.docs.map((d) {
+          final map = Map<String, dynamic>.from(d.data());
+          map['id'] = d.id;
+          return WorkoutLog.fromMap(map);
+        }).toList();
       }
     } catch (_) {}
 
@@ -405,6 +553,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _saveWorkouts() async {
+    final userKey = _storageUserKey;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'fittrack_workouts_$userKey',
+        jsonEncode(_workouts.map((w) => w.toMap()).toList()),
+      );
+    } catch (e) {
+      debugPrint('Local workouts save error: $e');
+    }
+
     if (!isFirebaseAvailable || _uid == null || _workoutsCol == null) return;
     try {
       final batch = FirebaseFirestore.instance.batch();
@@ -419,11 +578,38 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _saveSchedule() async {
-    if (!isFirebaseAvailable || _uid == null || _scheduleDoc == null) return;
+    final userKey = _storageUserKey;
+
+    // 1. Save immediately to SharedPreferences local cache
     try {
-      await _scheduleDoc!.set(_weeklySchedule);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'fittrack_schedule_$userKey',
+        jsonEncode(_weeklySchedule),
+      );
     } catch (e) {
-      debugPrint('Firestore save schedule error: $e');
+      debugPrint('Local schedule save error: $e');
+    }
+
+    if (!isFirebaseAvailable || _uid == null) return;
+
+    // 2. Primary: Save directly to users/{uid} document with merge (per project spec)
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(_uid).set({
+        'weeklySchedule': _weeklySchedule,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Firestore save schedule to userDoc error: $e');
+    }
+
+    // 3. Fallback: Also save to meta/schedule subcollection
+    try {
+      if (_scheduleDoc != null) {
+        await _scheduleDoc!.set(_weeklySchedule);
+      }
+    } catch (e) {
+      debugPrint('Firestore save schedule to _scheduleDoc error: $e');
     }
   }
 
@@ -445,7 +631,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _initDefaultTemplates() async {
+  Future<void> _initDefaultTemplates({bool saveSchedule = false}) async {
     _workouts = [
       Workout(
         id: 'push-1',
@@ -648,7 +834,10 @@ class AppState extends ChangeNotifier {
       ),
     ];
     await _saveWorkouts();
-    await _saveSchedule();
+    if (saveSchedule) {
+      _weeklySchedule = defaultWeeklySchedule;
+      await _saveSchedule();
+    }
   }
 
   // ── Auth actions (FirebaseAuth) ────────────────────────────────────────────
@@ -668,9 +857,7 @@ class AppState extends ChangeNotifier {
       _isAuthenticated = true;
       _userEmail = email;
       _displayName = email.split('@').first;
-      if (_workouts.isEmpty) {
-        await _initDefaultTemplates();
-      }
+      await loadUserData();
     }
     notifyListeners();
   }
@@ -686,27 +873,29 @@ class AppState extends ChangeNotifier {
       _isAuthenticated = true;
       _displayName = name;
       _userEmail = user.email ?? email;
-      // Persist user document in Firestore
+      _weeklySchedule = defaultWeeklySchedule;
+      // Persist user document in Firestore with default weeklySchedule
       try {
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'displayName': name,
           'email': email,
           'createdAt': FieldValue.serverTimestamp(),
           'units': _units,
+          'weeklySchedule': _weeklySchedule,
         }, SetOptions(merge: true));
       } catch (e) {
         debugPrint('Firestore profile creation error: $e');
       }
       // Seed default templates into Firestore for new user
-      await _initDefaultTemplates();
+      await _initDefaultTemplates(saveSchedule: true);
       await loadUserData();
     } else {
       _isAuthenticated = true;
       _displayName = name;
       _userEmail = email;
-      if (_workouts.isEmpty) {
-        await _initDefaultTemplates();
-      }
+      _weeklySchedule = defaultWeeklySchedule;
+      await _initDefaultTemplates(saveSchedule: true);
+      await loadUserData();
     }
     notifyListeners();
   }
@@ -761,6 +950,7 @@ class AppState extends ChangeNotifier {
       };
       if (credential.additionalUserInfo?.isNewUser ?? false) {
         profile['createdAt'] = FieldValue.serverTimestamp();
+        profile['weeklySchedule'] = defaultWeeklySchedule;
       }
       await FirebaseFirestore.instance
           .collection('users')
@@ -860,6 +1050,13 @@ class AppState extends ChangeNotifier {
   }
 
   // Workout CRUD
+  String newWorkoutId() {
+    if (isFirebaseAvailable && _workoutsCol != null) {
+      return _workoutsCol!.doc().id;
+    }
+    return 'w_${DateTime.now().millisecondsSinceEpoch}';
+  }
+
   void addWorkout(Workout workout) {
     _workouts.add(workout);
     _saveWorkouts();
@@ -889,10 +1086,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void setDayWorkouts(int isoWeekday, List<String> workoutIds) {
-    _weeklySchedule[isoWeekday.toString()] = workoutIds;
-    _saveSchedule();
+  Future<void> setDayWorkouts(int isoWeekday, List<String> workoutIds) async {
+    _weeklySchedule[isoWeekday.toString()] = List<String>.from(workoutIds);
     notifyListeners();
+    await _saveSchedule();
   }
 
   // Active workout session methods
@@ -3489,9 +3686,14 @@ class ScheduleTab extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         FilledButton(
-                          onPressed: () {
-                            appState.setDayWorkouts(isoDay, currentAssigned);
-                            Navigator.pop(ctx);
+                          onPressed: () async {
+                            await appState.setDayWorkouts(
+                              isoDay,
+                              currentAssigned,
+                            );
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx);
+                            }
                           },
                           child: const Text('Save Schedule'),
                         ),
@@ -3680,7 +3882,7 @@ class _WorkoutEditorScreenState extends State<WorkoutEditorScreen> {
       appState.updateWorkout(updated);
     } else {
       final newWorkout = Workout(
-        id: UniqueKey().toString(),
+        id: appState.newWorkoutId(),
         name: name,
         category: _category,
         exercises: _exercises,

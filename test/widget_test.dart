@@ -163,4 +163,28 @@ void main() {
 
     expect(appState.getWeeklyStreak(), 1);
   });
+
+  test('scheduled program on a certain day persists across logout and login', () async {
+    final appState = AppState(initialDarkMode: true);
+    addTearDown(appState.dispose);
+
+    const email = 'athlete@example.com';
+    await appState.login(email, 'password123');
+
+    // Pick a workout and assign it to Wednesday (day 3)
+    final workout = appState.workouts.first;
+    await appState.setDayWorkouts(3, [workout.id]);
+
+    expect(appState.weeklySchedule['3'], contains(workout.id));
+
+    // Log out: in-memory state is cleared
+    await appState.logout();
+    expect(appState.isAuthenticated, isFalse);
+    expect(appState.weeklySchedule['3'], isEmpty);
+
+    // Log in again: schedule is restored
+    await appState.login(email, 'password123');
+    expect(appState.isAuthenticated, isTrue);
+    expect(appState.weeklySchedule['3'], contains(workout.id));
+  });
 }
